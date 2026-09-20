@@ -25,6 +25,12 @@
     <ClCompile Include="console\tivdp.cpp">
       <Filter>console</Filter>
     </ClCompile>
+    <ClCompile Include="console\tivdp_pico9918.cpp">
+      <Filter>console</Filter>
+    </ClCompile>
+    <ClCompile Include="console\tivdp_pico9918_debug.cpp">
+      <Filter>console</Filter>
+    </ClCompile>
     <ClCompile Include="console\Tiemul.cpp">
       <Filter>console</Filter>
     </ClCompile>
@@ -125,6 +131,9 @@
       <Filter>addons</Filter>
     </ClInclude>
     <ClInclude Include="console\tiemul.h">
+      <Filter>console</Filter>
+    </ClInclude>
+    <ClInclude Include="console\tivdp_pico9918.h">
       <Filter>console</Filter>
     </ClInclude>
     <ClInclude Include="console\sound.h">

@@ -120,6 +120,7 @@
 #include "..\disk\tipiDisk.h"
 #include "..\disk\ramdisk.h"
 #include "sound.h"
+#include "tivdp_pico9918.h"
 #include "..\debugger\bug99.h"
 #include "..\addons\mpd.h"
 #include "..\addons\ubergrom.h"
@@ -935,6 +936,12 @@ skiprestofuser:
 	bEnable128k=GetPrivateProfileInt("video",	"Enable128k",		bEnable128k, INIFILE);
 	// whether to interleave the GPU execution
 	bInterleaveGPU = GetPrivateProfileInt("video",	"InterleaveGPU",	bInterleaveGPU, INIFILE);
+	// whether to run pico9918-core instead of Classic99's own VDP
+	bUsePico9918 = GetPrivateProfileInt("video",	"UsePico9918",		bUsePico9918, INIFILE);
+	// the chip it answers as - defaults from the older EnableF18A key above
+	nVdpChip = GetPrivateProfileInt("video",	"VdpChip",
+									bF18Enabled ? P9918_CHIP_F18A : P9918_CHIP_TMS9918A, INIFILE);
+	p9918ReconcileChip();
 	// whether to force correct aspect ratio
 	MaintainAspect=	GetPrivateProfileInt("video",	"MaintainAspect",	MaintainAspect, INIFILE);
 	// 0-none, 1-DIB, 2-DX, 3-DX Full
@@ -1148,7 +1155,8 @@ void SaveConfig() {
 	WritePrivateProfileInt(		"roms",			"cartgroup",			nCartGroup,					INIFILE);
 	WritePrivateProfileInt(		"roms",			"cartidx",				nCart,						INIFILE);
 	
-	WritePrivateProfileInt(		"video",		"FilterMode",			FilterMode,					INIFILE);
+	// the user's pick, which is parked rather than lost while pico9918-core is engaged
+	WritePrivateProfileInt(		"video",		"FilterMode",			(nParkedFilterMode >= 0) ? nParkedFilterMode : FilterMode,	INIFILE);
 	WritePrivateProfileInt(		"video",		"frameskip",			drawspeed,					INIFILE);
 	WritePrivateProfileInt(		"video",		"heatmapfadespeed",		HeatMapFadeSpeed,			INIFILE);
 
@@ -1158,6 +1166,8 @@ void SaveConfig() {
 	WritePrivateProfileInt(		"video",		"Enable80Col",			bEnable80Columns,			INIFILE);
 	WritePrivateProfileInt(		"video",		"Enable128k",			bEnable128k,			    INIFILE);
 	WritePrivateProfileInt(		"video",		"InterleaveGPU",		bInterleaveGPU,				INIFILE);
+	WritePrivateProfileInt(		"video",		"UsePico9918",			bUsePico9918,				INIFILE);
+	WritePrivateProfileInt(		"video",		"VdpChip",				nVdpChip,					INIFILE);
 
 	WritePrivateProfileInt(		"video",		"StretchMode",			StretchMode,				INIFILE);
 	WritePrivateProfileInt(		"video",		"Flicker",				bUse5SpriteLimit,			INIFILE);
@@ -1649,12 +1659,18 @@ int WINAPI WinMain( HINSTANCE hInst, HINSTANCE hInPrevInstance, LPSTR lpCmdLine,
 	// Read configuration - uses above settings as default!
 	ReadConfig();
 
+	// the reset above ran before the ini named a VDP engine, so do it again
+	vdpReset(true);
+
     // initialize debugger links
 	InitBug99();
 	initDbgHook();
 
     // now we can decide on shared memory
-    if ((bEnableDebugger) && (bEnableDebugSharedMem)) {
+    // under the core VDP[] is its own VRAM, not ours to swap for a file mapping
+    if ((bEnableDebugger) && (bEnableDebugSharedMem) && (p9918Active())) {
+        debug_write("VDP memory belongs to pico9918-core, not sharing it.");
+    } else if ((bEnableDebugger) && (bEnableDebugSharedMem)) {
         // setup VDP and staticCPU as shared memory
         // TODO: staticCPU is just ROMs and scratchpad, AMS systemMemory is all dynamicRAM
 
@@ -1774,10 +1790,10 @@ int WINAPI WinMain( HINSTANCE hInst, HINSTANCE hInPrevInstance, LPSTR lpCmdLine,
 	SendMessage(myWnd, WM_COMMAND, ID_DISK_CORRUPTDSKRAM, 1);
 	SendMessage(myWnd, WM_COMMAND, ID_VIDEO_MAINTAINASPECT, 1);
 	SendMessage(myWnd, WM_COMMAND, ID_VIDEO_FILTERMODE_NONE+FilterMode, 1);
-	SendMessage(myWnd, WM_COMMAND, ID_VIDEO_ENABLEF18A, 1);
 	SendMessage(myWnd, WM_COMMAND, ID_VIDEO_INTERLEAVEGPU, 1);
 	SendMessage(myWnd, WM_COMMAND, ID_VIDEO_ENABLE80COLUMNHACK, 1);
 	SendMessage(myWnd, WM_COMMAND, ID_VIDEO_ENABLE128KHACK, 1);
+	SendMessage(myWnd, WM_COMMAND, ID_VDPENGINE_CLASSIC99, 1);	// refreshes both VDP menus
 	SendMessage(myWnd, WM_COMMAND, ID_VIDEO_STRETCHMODE_NONE+StretchMode, 1);
 	SendMessage(myWnd, WM_COMMAND, ID_VIDEO_50HZ, 1);
 	SendMessage(myWnd, WM_COMMAND, ID_OPTIONS_PAUSEINACTIVE, 1);
@@ -2283,6 +2299,7 @@ void fail(char *x)
 
 	if (framedata) free(framedata);
 	if (framedata2) free(framedata2);
+	p9918Shutdown();		// hands VDP[] back, and writes the core's settings
 
 	if (hSpeechDll) {
 		FreeLibrary(hSpeechDll);
@@ -2412,8 +2429,8 @@ void __cdecl emulti(void *)
 			// execute one opcode
 			do1();
 
-			// GPU 
-			if (bInterleaveGPU) {
+			// GPU (the core runs it itself, paced per scanline)
+			if ((bInterleaveGPU) && (!p9918Active())) {
 				// todo: this is a hack for interleaving F18GPU with the 9900 - and it works, but.. not correct at all.
 				if (pGPU->GetIdle() == 0) {
 					pCurrentCPU = pGPU;
@@ -3592,6 +3609,9 @@ void do1()
 		cpuframes+=nNumFrames;
 		retrace_count-=nNumFrames*(drawspeed+1);
 		timercount+=nNumFrames*(drawspeed+1);
+
+		// the config save callback fires from the GPU step, no place to touch a file
+		p9918FlushConfig();
 
 		end_of_frame=0;								// No matter what, this tick is passed!
 	}
@@ -5074,6 +5094,36 @@ void increment_vdpadd()
 }
 
 //////////////////////////////////////////////////////
+// 4k DRAM addressing. Split out of GetRealVDP so the
+// pico9918-core bridge can share it.
+//
+// Address is 6 bits + 6 bits, but because of the 16k
+// RAMs it gets padded back up to 7 bits each for row
+// and col. The lower 6 bits are used as-is. The next
+// /7/ bits are rotated left one position.. not really
+// sure why they didn't just do a 6 bit shift and lose
+// the top bit, but this does seem to match every test
+// I throw at it now. Finally, the 13th bit (MSB for
+// the VDP) is left untouched. There are no fixed bits.
+// Test values confirmed on real console:
+// 1100 -> 0240
+// 1810 -> 1050
+// 2210 -> 2410
+// 2211 -> 2411
+// 2240 -> 2280
+// 3210 -> 2450
+// 3810 -> 3050
+// Of course, only after working all this out did I look at Sean Young's
+// document, which describes this same thing from the hardware side. Those
+// notes confirm mine.
+//////////////////////////////////////////////////////
+int Scramble4kVDP(int addr) {
+	//     static bits    shifted bits          rotated bit
+	return (addr&0x203f) | ((addr&0x0fc0)<<1) | ((addr&0x1000)>>6);
+	// thanks to JasonACT for spotting a bug in this math ;)
+}
+
+//////////////////////////////////////////////////////
 // Return the actual 16k address taking the 4k mode bit
 // into account.
 //////////////////////////////////////////////////////
@@ -5096,29 +5146,8 @@ int GetRealVDP() {
 		}
 		
 	} else {
-		// 4k mode -- address is 6 bits + 6 bits, but because of the 16k RAMs,
-		// it gets padded back up to 7 bit each for row and col
-		// The actual method used is a little complex to describe (although
-		// I'm sure it's simple in silicon). The lower 6 bits are used as-is.
-		// The next /7/ bits are rotated left one position.. not really sure
-		// why they didn't just do a 6 bit shift and lose the top bit, but
-		// this does seem to match every test I throw at it now. Finally, the
-		// 13th bit (MSB for the VDP) is left untouched. There are no fixed bits.
-		// Test values confirmed on real console:
-		// 1100 -> 0240
-		// 1810 -> 1050
-		// 2210 -> 2410
-		// 2211 -> 2411
-		// 2240 -> 2280
-		// 3210 -> 2450
-		// 3810 -> 3050
-		// Of course, only after working all this out did I look at Sean Young's
-		// document, which describes this same thing from the hardware side. Those
-		// notes confirm mine.
-		//
-		//         static bits       shifted bits           rotated bit
-		RealVDP = (VDPADD&0x203f) | ((VDPADD&0x0fc0)<<1) | ((VDPADD&0x1000)>>6);
-		// thanks to JasonACT for spotting a bug in this math ;)
+		// 4k mode - see Scramble4kVDP above
+		RealVDP = Scramble4kVDP(VDPADD);
 	}
 
 	// force 8k DRAMs (strip top row bit - this should be right - console doesn't work though)
@@ -5147,6 +5176,11 @@ Byte rvdpbyte(Word x, READACCESSTYPE rmw)
     if (pCurrentCPU->GetST()&0xf) {
         debug_write("Warning: PC >%04X reading VDP with LIMI %d", pCurrentCPU->GetPC(), pCurrentCPU->GetST()&0xf);
     }
+
+	// the core owns the address counter and prefetch
+	if (p9918Active()) {
+		return (x&0x0002) ? p9918ReadStatus() : p9918ReadData();
+	}
 
 	if (x&0x0002)
 	{	/* read status */
@@ -5292,6 +5326,17 @@ void wvdpbyte(Word x, Byte c)
     if (pCurrentCPU->GetST()&0xf) {
         debug_write("Warning: PC >%04X writing VDP with LIMI %d", pCurrentCPU->GetPC(), pCurrentCPU->GetST()&0xf);
     }
+
+	// the core owns the register file, palette port and unlock
+	if (p9918Active()) {
+		redraw_needed=REDRAW_LINES;
+		if (x&0x0002) {
+			p9918WriteAddr(c);
+		} else {
+			p9918WriteData(c);
+		}
+		return;
+	}
 
     if (x&0x0002)
 	{	/* write address */
@@ -5665,7 +5710,12 @@ void wVDPreg(Byte r, Byte v)
 	}
 
 	// for the F18A GPU, copy it to RAM
-	VDP[0x6000+r]=v;
+	// under the core VDP[>6000] is the live register file, so go through the bus
+	if (p9918Active()) {
+		p9918WriteReg(r, v);
+	} else {
+		VDP[0x6000+r]=v;
+	}
 }
 
 ////////////////////////////////////////////////////////////////

@@ -775,6 +775,54 @@
       <AdditionalIncludeDirectories>console</AdditionalIncludeDirectories>
     </ClCompile>
   </ItemDefinitionGroup>
+  <!--
+    pico9918-core is built by CMake rather than hand-listed, because the library
+    generates sources and a build-config header. Needs CMake and Python 3 on PATH.
+
+    The options are named rather than defaulted, and the library's generated
+    pico9918_build_config.h rejects a consumer that disagrees - so only
+    PICO9918_STATIC, which MSBuild cannot inherit, is repeated below.
+  -->
+  <PropertyGroup>
+    <Pico9918Src>$(MSBuildThisFileDirectory)3rdparty\pico9918-core</Pico9918Src>
+    <Pico9918Build>$(MSBuildThisFileDirectory)3rdparty\build\pico9918-core-$(Platform)</Pico9918Build>
+    <Pico9918Config Condition="$(Configuration.Contains('Debug'))">Debug</Pico9918Config>
+    <Pico9918Config Condition="'$(Pico9918Config)'==''">Release</Pico9918Config>
+    <Pico9918Runtime Condition="'$(Pico9918Config)'=='Debug'">MultiThreadedDebug</Pico9918Runtime>
+    <Pico9918Runtime Condition="'$(Pico9918Runtime)'==''">MultiThreaded</Pico9918Runtime>
+    <Pico9918Lib>$(Pico9918Build)\src\$(Pico9918Config)\pico9918_core.lib</Pico9918Lib>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- what the archive is built from, for the up-to-date check below -->
+    <Pico9918Source Include="$(Pico9918Src)\src\**\*" />
+    <Pico9918Source Include="$(Pico9918Src)\CMakeLists.txt" />
+    <Pico9918Source Include="$(Pico9918Src)\pico9918_image_assets.cmake" />
+    <Pico9918Source Include="$(Pico9918Src)\tools\img2carray.py" />
+    <Pico9918Source Include="$(MSBuildThisFileDirectory)3rdparty\pico9918_core_version.cmake" />
+  </ItemGroup>
+  <!-- separate from the build below, which an up-to-date check can skip -->
+  <Target Name="CheckPico9918Core" BeforeTargets="ClCompile">
+    <Error Condition="!Exists('$(Pico9918Src)\CMakeLists.txt')"
+           Text="pico9918-core is missing - run: git submodule update --init --recursive" />
+  </Target>
+  <Target Name="BuildPico9918Core" BeforeTargets="ClCompile"
+          Inputs="@(Pico9918Source)" Outputs="$(Pico9918Lib)">
+    <MakeDir Directories="$(Pico9918Build)" />
+    <Exec Command="cmake -DSRC=&quot;$(Pico9918Src)&quot; -DOUT=&quot;$(Pico9918Build)\pico9918_core_version.h&quot; -P &quot;$(MSBuildThisFileDirectory)3rdparty\pico9918_core_version.cmake&quot;" />
+    <Exec Command="cmake -S &quot;$(Pico9918Src)&quot; -B &quot;$(Pico9918Build)&quot; -G &quot;Visual Studio 17 2022&quot; -A $(Platform) -DPICO9918_TEXT80_8BPP=ON -DPICO9918_RUNTIME_CHIP=ON -DPICO9918_DEBUG_API=ON -DCMAKE_POLICY_DEFAULT_CMP0091=NEW -DCMAKE_MSVC_RUNTIME_LIBRARY=$(Pico9918Runtime)" />
+    <Exec Command="cmake --build &quot;$(Pico9918Build)&quot; --config $(Pico9918Config) --target pico9918_core" />
+  </Target>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <!-- the library's own headers, the generated build-config header beside them,
+           and our generated pico9918_core_version.h at the top of the build tree -->
+      <AdditionalIncludeDirectories>$(Pico9918Src)\src;$(Pico9918Build)\src;$(Pico9918Build);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>PICO9918_STATIC;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <Link>
+      <AdditionalDependencies>$(Pico9918Lib);%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="addons\F18A.cpp" />
     <ClCompile Include="addons\gigaFlash.cpp">
@@ -849,6 +897,8 @@
       <PreprocessorDefinitions Condition="'$(Configuration)|$(Platform)'=='ReleaseArm64|x64'">%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PreprocessorDefinitions Condition="'$(Configuration)|$(Platform)'=='ReleaseArm64|ARM'">%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
+    <ClCompile Include="console\tivdp_pico9918.cpp" />
+    <ClCompile Include="console\tivdp_pico9918_debug.cpp" />
     <ClCompile Include="addons\WindowProc.cpp">
       <PreprocessorDefinitions Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PreprocessorDefinitions Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">%(PreprocessorDefinitions)</PreprocessorDefinitions>
@@ -1001,6 +1051,7 @@
     <ClInclude Include="console\cpu9900.h" />
     <ClInclude Include="console\sound.h" />
     <ClInclude Include="console\tiemul.h" />
+    <ClInclude Include="console\tivdp_pico9918.h" />
     <ClInclude Include="debugger\dbghook.h" />
     <ClInclude Include="disk\cf7Disk.h" />
     <ClInclude Include="disk\ramdisk.h" />
