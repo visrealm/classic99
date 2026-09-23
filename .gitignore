@@ -277,5 +277,5 @@ __pycache__/
 # tools/**
 # !tools/packages.config
 
-# pico9918-core CMake build tree (see the BuildPico9918Core target in classic99.vcxproj)
+# left over from when pico9918-core was a submodule with its CMake build in the tree
 /3rdparty/build/
