@@ -278,8 +278,8 @@ static int VdpChipMenuId(int chip) {
 	return ID_VDPCHIP_F18A;
 }
 
-// The filters are built around the 272x208 buffer, which the core's 640x480 field
-// does not fit, so the menu is parked while it runs. The ids are in FilterMode order.
+// The filters assume the 272x208 buffer, which the core's 640x480 field is not.
+// Ids in FilterMode order.
 static void UpdateFilterMenu(HMENU hMenu, UINT flags) {
 	const bool core = p9918Active();
 
@@ -303,15 +303,9 @@ static void UpdateFilterMenu(HMENU hMenu, UINT flags) {
 	}
 }
 
-// Nothing here reaches the core - it renders and addresses VRAM itself. Only the
-// menu is parked; the variables keep the user's pick for the Classic99 VDP.
+// Nothing here reaches the core; the Layers items do, through p9918SyncLayers.
 static void UpdateClassic99OnlyMenu(HMENU hMenu, UINT flags) {
 	static const int ids[] = {
-		ID_LAYERS_DISABLEBLANKING,
-		ID_LAYERS_DISABLESPRITES,
-		ID_LAYERS_DISABLEBACKGROUND,
-		ID_LAYERS_DISABLEBITMAPCOLORLAYER,
-		ID_LAYERS_DISABLEBITMAPPATTERNLAYER,
 		ID_VIDEO_FLICKER,
 		ID_VIDEO_INTERLEAVEGPU,
 		ID_VIDEO_ENABLE80COLUMNHACK,
@@ -345,7 +339,7 @@ static void UpdateVdpEngineMenu(bool silent) {
 	EnableMenuItem(hMenu, ID_VDPCHIP_PICO9918PRO, coreOnly);
 	EnableMenuItem(hMenu, ID_VDPCHIP_TMS9918,     coreOnly);
 
-	// both follow the engine that is running, not the one selected - the swap is at the reset
+
 	UINT engineOnly = MF_BYCOMMAND | (p9918Active() ? (MF_DISABLED | MF_GRAYED) : MF_ENABLED);
 	UpdateFilterMenu(hMenu, engineOnly);
 	UpdateClassic99OnlyMenu(hMenu, engineOnly);
@@ -1509,6 +1503,7 @@ LONG_PTR FAR PASCAL myproc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 					bDisableBlank=true;
 					CheckMenuItem(GetMenu(myWnd), ID_LAYERS_DISABLEBLANKING, MF_CHECKED);
 				} 
+				p9918SyncLayers();
 				redraw_needed=REDRAW_LINES;
 				break;
 
@@ -1520,6 +1515,7 @@ LONG_PTR FAR PASCAL myproc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 					bDisableSprite=true;
 					CheckMenuItem(GetMenu(myWnd), ID_LAYERS_DISABLESPRITES, MF_CHECKED);
 				} 
+				p9918SyncLayers();
 				redraw_needed=REDRAW_LINES;
 				break;
 
@@ -1531,6 +1527,7 @@ LONG_PTR FAR PASCAL myproc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 					bDisableBackground=true;
 					CheckMenuItem(GetMenu(myWnd), ID_LAYERS_DISABLEBACKGROUND, MF_CHECKED);
 				} 
+				p9918SyncLayers();
 				redraw_needed=REDRAW_LINES;
 				break;
 
@@ -1542,6 +1539,7 @@ LONG_PTR FAR PASCAL myproc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 					bDisableColorLayer=true;
 					CheckMenuItem(GetMenu(myWnd), ID_LAYERS_DISABLEBITMAPCOLORLAYER, MF_CHECKED);
 				} 
+				p9918SyncLayers();
 				redraw_needed=REDRAW_LINES;
 				break;
 
@@ -1553,6 +1551,7 @@ LONG_PTR FAR PASCAL myproc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 					bDisablePatternLayer=true;
 					CheckMenuItem(GetMenu(myWnd), ID_LAYERS_DISABLEBITMAPPATTERNLAYER, MF_CHECKED);
 				} 
+				p9918SyncLayers();
 				redraw_needed=REDRAW_LINES;
 				break;
 

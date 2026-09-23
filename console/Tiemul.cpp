@@ -2429,7 +2429,7 @@ void __cdecl emulti(void *)
 			// execute one opcode
 			do1();
 
-			// GPU (the core runs it itself, paced per scanline)
+			// GPU (under the core, p9918GpuCycles runs it)
 			if ((bInterleaveGPU) && (!p9918Active())) {
 				// todo: this is a hack for interleaving F18GPU with the 9900 - and it works, but.. not correct at all.
 				if (pGPU->GetIdle() == 0) {
@@ -4270,6 +4270,7 @@ void do1()
 
 		if (pCurrentCPU == pCPU) {
 			int nLocalCycleCount = pCurrentCPU->GetCycleCount();
+			p9918GpuCycles(nLocalCycleCount);
 			InterlockedExchangeAdd((LONG*)&cycles_left, -nLocalCycleCount);
 			unsigned long old=total_cycles;
 			InterlockedExchangeAdd((LONG*)&total_cycles, nLocalCycleCount);

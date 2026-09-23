@@ -33,6 +33,7 @@ extern bool bIgnoreConsoleBreakpointHits;
 extern CPU9900 * volatile pCurrentCPU;
 
 extern int Scramble4kVDP(int addr);		// Tiemul.cpp
+extern int cfg_cpf;						// Tiemul.cpp - with hzRate, the 9900's rate in Hz
 
 extern int statusReadLine;
 extern int statusReadCount;
@@ -48,6 +49,12 @@ pico9918_t *tms9918 = NULL;
 
 static bool engaged = false;
 static Byte *pClassic99VDP = NULL;   // Classic99's own buffer, while we borrow VDP[]
+
+static unsigned int gpuIps = 0;          // 0 when the chip has no GPU
+static unsigned int gpuPerCycle = 0;     // 16.16 GPU instructions per 9900 cycle
+static int gpuPerCycleRate = 0;          // the 9900 rate gpuPerCycle was derived from
+static long long gpuBalance = 0;         // 16.16 GPU instructions run beyond the 9900's elapsed cycles
+static int gpuLastCpuCycles = 14;        // what one 9900 instruction costs, for p9918CpuStepDue
 
 // The core hands back BGR12; Classic99 blits 0RGB.
 static unsigned int bgr12_0rgb[4096];
@@ -417,13 +424,19 @@ void p9918Reset(bool isCold) {
 	curLine = 0;
 	configureFrame();
 
-	pico9918_gpu_set_clock(tms9918,
-						   (nVdpChip == P9918_CHIP_PICO9918_PRO) ? PICO9918_GPU_IPS_PRO :
-						   (nVdpChip == P9918_CHIP_PICO9918)     ? PICO9918_GPU_IPS_CLASSIC :
-						   (nVdpChip == P9918_CHIP_F18A)         ? PICO9918_GPU_IPS_F18A : 0);
+	gpuIps = (nVdpChip == P9918_CHIP_PICO9918_PRO) ? PICO9918_GPU_IPS_PRO :
+			 (nVdpChip == P9918_CHIP_PICO9918)     ? PICO9918_GPU_IPS_CLASSIC :
+			 (nVdpChip == P9918_CHIP_F18A)         ? PICO9918_GPU_IPS_F18A : 0;
+
+	// zero, not gpuIps: p9918GpuCycles runs the GPU, and a clock here would run it
+	// again off the library's own scanline service
+	pico9918_gpu_set_clock(tms9918, 0);
+	gpuBalance = 0;
+	gpuPerCycleRate = 0;
 
 	p9918SyncShadow();
-
+	p9918SyncLayers();
+	p9918SyncGpuDebug();
 }
 
 void p9918Shutdown() {
@@ -466,6 +479,7 @@ void p9918WriteReg(unsigned char r, unsigned char v) {
 
 	pico9918_write_register_value(tms9918, (pico9918_register_t)r, v);
 	p9918SyncShadow();
+	p9918ServiceGpuBreak();
 }
 
 void p9918WriteAddr(unsigned char c) {
@@ -499,6 +513,7 @@ void p9918WriteAddr(unsigned char c) {
 
 	pico9918_write_addr(tms9918, c);
 	p9918SyncShadow();
+	p9918ServiceGpuBreak();
 }
 
 void p9918WriteData(unsigned char c) {
@@ -531,6 +546,7 @@ void p9918WriteData(unsigned char c) {
 	pico9918_write_data(tms9918, c);
 	trackIncrement();
 	p9918SyncShadow();
+	p9918ServiceGpuBreak();
 }
 
 unsigned char p9918ReadStatus() {
@@ -653,6 +669,34 @@ static void virtualLine() {
 	}
 }
 
+void p9918GpuCycles(int cycles) {
+	if ((!engaged) || (0 == gpuIps)) return;
+
+	// cfg_cpf, not max_cpf: a stop zeroes max_cpf, and F2 still runs an instruction
+	const int rate = cfg_cpf * hzRate;
+	if (rate != gpuPerCycleRate) {
+		gpuPerCycleRate = rate;
+		gpuPerCycle = (rate > 0) ? (unsigned int)((((unsigned long long)gpuIps) << 16) / rate) : 0;
+	}
+
+	gpuLastCpuCycles = cycles;
+	gpuBalance -= (long long)cycles * gpuPerCycle;
+	if (gpuBalance >= 0) return;
+
+	const unsigned int n = (unsigned int)((-gpuBalance) >> 16);
+	if (0 == n) return;
+	gpuBalance += ((long long)n) << 16;
+	pico9918_gpu_step_n(tms9918, n);
+}
+
+void p9918GpuCredit() {
+	gpuBalance += 1 << 16;
+}
+
+bool p9918CpuStepDue() {
+	return gpuBalance >= (long long)gpuLastCpuCycles * gpuPerCycle;
+}
+
 void p9918Scanline() {
 	if (!engaged) return;
 
@@ -667,4 +711,5 @@ void p9918Scanline() {
 	LeaveCriticalSection(&VideoCS);
 
 	p9918SyncShadow();
+	p9918ServiceGpuBreak();
 }

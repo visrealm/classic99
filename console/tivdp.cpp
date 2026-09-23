@@ -2879,6 +2879,18 @@ static void GetFilterSize(int *pWidth, int *pHeight) {
 // The surface size Change Size and the aspect fit work in.
 // On demand, not latched.
 ////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////
+// How far up VDP[] the debugger may look. 16k of VRAM, plus
+// the F18A's 2k of GPU RAM - or, under the core, the whole
+// 64k the GPU addresses: palette, registers, status and the
+// workspace are all up there.
+////////////////////////////////////////////////////////////
+int GetDebugVDPSize() {
+	if (p9918Active()) return 0x10000;
+	if (bF18Enabled) return 0x4800;
+	return 0x4000;
+}
+
 void GetSurfaceSize(int *pWidth, int *pHeight) {
 	// the core scans out its own frame, at its own size
 	if (p9918Active()) {
