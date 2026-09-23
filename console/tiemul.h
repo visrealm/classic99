@@ -117,7 +117,8 @@ enum {
     BREAK_WRITEAMS,
     BREAK_EQUALS_AMS,
     BREAK_WP,
-    BREAK_ST
+    BREAK_ST,
+    BREAK_GPUPC
 };
 
 // reserved calibration data - you can hack the INI for better control
@@ -354,6 +355,7 @@ void RenderFont(void);
 void DrawSprites(int scanline);
 void SetupDirectDraw(bool fullscreen);
 void GetSurfaceSize(int *pWidth, int *pHeight);
+int GetDebugVDPSize();
 void takedownDirectDraw();
 int ResizeBackBuffer(int w, int h);
 void UpdateHeatVDP(int Address);
@@ -495,6 +497,8 @@ void verifyCallFiles();
 
 void DoPause();
 void DoStep();
+void DoStepGpu();
+void DoStepGpuOver();
 void DoStepOver();
 void DoPlay();
 void DoFastForward();

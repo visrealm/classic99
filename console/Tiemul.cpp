@@ -184,6 +184,9 @@ volatile unsigned long total_cycles=0;						// used for interrupts
 unsigned long speech_cycles=0;								// used to sync speech
 bool total_cycles_looped=false;
 bool bDebugAfterStep=false;									// force debug after step
+bool bStepGpuPending=false;									// GPU step asked for, performed on the emulation thread
+bool bStepGpuOverPending=false;								// ... and the step over
+bool bDebugGpuFocus=false;									// the stop we are in is the core GPU's, so the panes follow it
 bool bStepOver=false;										// whether step over is on
 int nStepCount=0;											// how many instructions to step before breakpoints work again (usually 1)
 int enableDebugOpcodes = 0;									// enable debug opcodes for CPU
@@ -3825,6 +3828,12 @@ void do1()
 						}
 						break;
 
+					case BREAK_GPUPC:
+						if ((pCurrentCPU == pGPU) && (CheckRange(idx, PC))) {
+							TriggerBreakPoint();
+						}
+						break;
+
 					// timing instead of breakpoints
                     // TODO: multiple timers, proper memory placement
 					case BREAK_RUN_TIMER:
@@ -3909,15 +3918,23 @@ void do1()
 			key[VK_F1]=0;
 		}
 		
-		// step
+		// step, or with shift the core's GPU instead
 		if (key[VK_F2]) {
-			DoStep();
+			if ((GetAsyncKeyState(VK_SHIFT)&0x8000) && (p9918Active())) {
+				DoStepGpu();
+			} else {
+				DoStep();
+			}
 			key[VK_F2]=0;
 		}
 
-		// step over
+		// step over, or with shift the core's GPU instead
 		if (key[VK_F3]) {
-			DoStepOver();
+			if ((GetAsyncKeyState(VK_SHIFT)&0x8000) && (p9918Active())) {
+				DoStepGpuOver();
+			} else {
+				DoStepOver();
+			}
 			key[VK_F3]=0;
 		}
 
@@ -4344,6 +4361,37 @@ void do1()
 			redraw_needed = REDRAW_LINES;
 		}
 	} else {
+		// here rather than DoStepGpu: the menu and debug window are not on this thread
+		if (bStepGpuPending) {
+			bStepGpuPending=false;
+			if (p9918StepGpu()) {
+				bDebugAfterStep=true;
+				if (p9918CpuStepDue()) {
+					InterlockedExchange((LONG*)&cycles_left, 1);
+					nStepCount=1;
+				}
+			} else {
+				debug_write("Step GPU: no GPU program is armed");
+			}
+		}
+
+		if (bStepGpuOverPending) {
+			bStepGpuOverPending=false;
+			if (p9918ArmGpuStepOver()) {
+				// not DoPlay: its posted throttle message lands after the call has
+				// returned and restarts the machine. DoStepOver resumes inline too.
+				max_cpf=cfg_cpf;
+				SetWindowText(myWnd, szDefaultWindowText);
+				InterlockedExchange((LONG*)&cycles_left, max_cpf);
+				nStepCount=1;
+				bDebugAfterStep=true;
+			} else if (p9918StepGpu()) {
+				bDebugAfterStep=true;
+			} else {
+				debug_write("Step GPU Over: no GPU program is armed");
+			}
+		}
+
 		// Go to sleep till it's time to work again, timeout wait after 50ms
 		// (so if we're very slow or the event dies, we keep running anyway)
 		if (bDebugAfterStep) {
@@ -7418,9 +7466,24 @@ void DoPause() {
 
 void DoStep() {
 	if (0 == max_cpf) {
+		bDebugGpuFocus=false;
 		InterlockedExchange((LONG*)&cycles_left, 1);	// allow one instruction through
 		bDebugAfterStep=true;
 		nStepCount=1;
+		SetEvent(hWakeupEvent);		// wake up CPU if it's sleeping
+	}
+}
+
+void DoStepGpu() {
+	if ((0 == max_cpf) && (p9918Active())) {
+		bStepGpuPending=true;
+		SetEvent(hWakeupEvent);		// wake up CPU if it's sleeping
+	}
+}
+
+void DoStepGpuOver() {
+	if ((0 == max_cpf) && (p9918Active())) {
+		bStepGpuOverPending=true;
 		SetEvent(hWakeupEvent);		// wake up CPU if it's sleeping
 	}
 }
@@ -7430,6 +7493,7 @@ void DoStepOver() {
     // a standard and then this can be a "temporary" breakpoint that
     // deletes itself once its hit.
 	if (0 == max_cpf) {
+		bDebugGpuFocus=false;
 		max_cpf=cfg_cpf;
 		SetWindowText(myWnd, szDefaultWindowText);
 		InterlockedExchange((LONG*)&cycles_left, max_cpf);
@@ -7538,6 +7602,9 @@ void TriggerBreakPoint(bool bForce, bool openDebugger) {
 	if ((!pCurrentCPU->enableDebug)&&(!bForce)) {
 		return;
 	}
+
+	// the GPU's own break sets it back on the way out of here
+	bDebugGpuFocus=false;
 
     EnterCriticalSection(&csDisasm);
         if (NULL != fpDisasm) {

@@ -437,13 +437,15 @@
 #define ID_VDPCHIP_PICO9918             40208
 #define ID_VDPCHIP_TMS9918              40209
 #define ID_VDPCHIP_PICO9918PRO          40210
+#define ID_DEBUG_STEPGPU                40211
+#define ID_DEBUG_STEPGPUOVER            40212
 
 // Next default values for new objects
 // 
 #ifdef APSTUDIO_INVOKED
 #ifndef APSTUDIO_READONLY_SYMBOLS
 #define _APS_NEXT_RESOURCE_VALUE        356
-#define _APS_NEXT_COMMAND_VALUE         40211
+#define _APS_NEXT_COMMAND_VALUE         40213
 #define _APS_NEXT_CONTROL_VALUE         1278
 #define _APS_NEXT_SYMED_VALUE           101
 #endif

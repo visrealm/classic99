@@ -73,6 +73,8 @@ void p9918Scanline();
 // Classic99 paces the GPU, not the library, so the two interleave per 9900
 // instruction rather than a scanline's worth at a time.
 void p9918GpuCycles(int cycles);
+void p9918GpuCredit();
+bool p9918CpuStepDue();
 
 // Copy the core's register file, status and unlock latch into VDPREG[], VDPS
 // and bF18AActive.
@@ -81,6 +83,11 @@ void p9918SyncShadow();
 // Debugger half - tivdp_pico9918_debug.cpp, the integration's only user of the
 // core's debugger surface.
 void          p9918SyncLayers();
+void          p9918SyncGpuDebug();
+void          p9918ServiceGpuBreak();
+bool          p9918StepGpu();
+bool          p9918ArmGpuStepOver();
+void          p9918DbgWriteMem(unsigned int addr, unsigned char v);
 void          p9918DbgWriteReg(unsigned char r, unsigned char v);
 unsigned char p9918DbgStatus(unsigned char reg);
 unsigned int  p9918DbgGpuPC();

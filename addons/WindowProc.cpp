@@ -75,6 +75,7 @@
 
 extern CPU9900 * volatile pCurrentCPU;
 extern CPU9900 *pCPU, *pGPU;
+extern bool bDebugGpuFocus;
 extern const char *szDefaultWindowText;
 extern bool bIgnoreConsoleBreakpointHits;
 extern HDC tmpDC;
@@ -1860,14 +1861,14 @@ LONG_PTR FAR PASCAL myproc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
 			case ID_CPUTHROTTLING_CPUOVERDRIVE:
 				ThrottleMode = THROTTLE_OVERDRIVE;
-				max_cpf=cfg_cpf;
+				if (lParam != 1) max_cpf=cfg_cpf;   // lParam(1) means internal message, don't change
 				SetSoundVolumes();		// unmute in case it was in slow mode
 				PostMessage(myWnd, WM_COMMAND, ID_OPTIONS_CPUTHROTTLING, 1);
 				break;
 
 			case ID_CPUTHROTTLING_SYSTEMMAXIMUM:
 				ThrottleMode = THROTTLE_SYSTEMMAXIMUM;
-				max_cpf=cfg_cpf;
+				if (lParam != 1) max_cpf=cfg_cpf;   // lParam(1) means internal message, don't change
 				SetSoundVolumes();		// unmute in case it was in slow mode
 				PostMessage(myWnd, WM_COMMAND, ID_OPTIONS_CPUTHROTTLING, 1);
 				break;
@@ -3079,6 +3080,10 @@ const char *FormatBreakpoint(int idx) {
                 // nothing to do here
                 break;
 
+			case BREAK_GPUPC:
+				szTmp[pos++]='V';
+				break;
+
 			case BREAK_ACCESS:
 				szTmp[pos++]='*';
 				break;
@@ -3347,11 +3352,11 @@ bool AddBreakpoint(char *buf1) {
                 nData &= 0xff;
 			}
 			break;
-		case 'V':	// VDP memory =
+		case 'V':	// VDP memory =, or the GPU's PC without one
 			nType=BREAK_EQUALS_VDP;
 			pTmp=strchr(buf1, '=');
 			if (NULL == pTmp) {
-				nType=BREAK_NONE;
+				nType=BREAK_GPUPC;
 			} else {
 				if (1 != sscanf(pTmp+1, "%x", &nData)) {
 					nType=BREAK_NONE;
@@ -3448,7 +3453,7 @@ bool AddBreakpoint(char *buf1) {
 
 				case BREAK_WRITEVDP:
 				case BREAK_READVDP:
-					if ((A>0x47ff) || (B>0x47ff)) {
+					if ((A >= GetDebugVDPSize()) || (B >= GetDebugVDPSize())) {
 						nType = BREAK_NONE;		// out of range for VDP RAM
 					}
 					break;
@@ -3514,6 +3519,11 @@ void UpdateMakeMenu(HWND hwnd, int enable) {
 	HMENU menu=GetMenu(hwnd);
 	if (menu != NULL) {
 		EnableMenuItem(menu, ID_MAKE_SAVEPROGRAM, MF_BYCOMMAND | (enable?MF_ENABLED:MF_GRAYED));
+
+		UINT gpuStep = MF_BYCOMMAND | (p9918Active() ? MF_ENABLED : (MF_DISABLED | MF_GRAYED));
+		EnableMenuItem(menu, ID_DEBUG_STEPGPU,     gpuStep);
+		EnableMenuItem(menu, ID_DEBUG_STEPGPUOVER, gpuStep);
+
 		DrawMenuBar(hwnd);
 	}
 }
@@ -4127,7 +4137,7 @@ INT_PTR CALLBACK DebugBoxProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 									if ((bIsReg) && (x > 7)) {
 										MessageBox(hwnd, "Out of range for VDP registers", "Classic99 Debugger", MB_ICONSTOP);
 										ok=IDNO;
-									} else if (x > 0x47FF) {
+									} else if (x >= GetDebugVDPSize()) {
 										MessageBox(hwnd, "Out of range for VDP address", "Classic99 Debugger", MB_ICONSTOP);
 										ok=IDNO;
 									}
@@ -4250,7 +4260,7 @@ INT_PTR CALLBACK DebugBoxProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 											}
 										} else {
                                             if (byte) {
-    											VDP[x] = y;
+    											p9918DbgWriteMem(x, (unsigned char)y);
                                             } else {
                                                 // parse the string and write each byte...
 							                    char *p=strchr(buf,'=');
@@ -4266,10 +4276,10 @@ INT_PTR CALLBACK DebugBoxProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam
                                                     }
                                                     p+=2;
 
-                                                    VDP[x] = y;
+                                                    p9918DbgWriteMem(x, (unsigned char)y);
 
                                                     ++x;
-                                                    if (x>=0x47ff) {
+                                                    if (x >= GetDebugVDPSize()-1) {
                                                         // no wraparound
                                                         break;
                                                     }
@@ -4363,6 +4373,14 @@ INT_PTR CALLBACK DebugBoxProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 
 				case ID_DEBUG_STEPOVER:
 					DoStepOver();
+					break;
+
+				case ID_DEBUG_STEPGPU:
+					DoStepGpu();
+					break;
+
+				case ID_DEBUG_STEPGPUOVER:
+					DoStepGpuOver();
 					break;
 
 				case ID_DEBUG_NORMALSPEED:
@@ -4616,13 +4634,16 @@ void DebugUpdateThread(void*) {
 			continue;
 		}
 
+		// pGPU's PC never moves under the core, so it cannot say whether this changed
+		const int nGPC = p9918Active() ? (int)p9918DbgGpuPC() : pGPU->GetPC();
+
 		// Helps a bit -- not much can change unless the PC does ;)
-		if ((nOldCPC == pCPU->GetPC()) && (nOldGPC == pGPU->GetPC()) && (nOldMemType == nMemType) && (0 == memcmp(szOldMemory, szTopMemory, sizeof(szOldMemory)))) {
+		if ((nOldCPC == pCPU->GetPC()) && (nOldGPC == nGPC) && (nOldMemType == nMemType) && (0 == memcmp(szOldMemory, szTopMemory, sizeof(szOldMemory)))) {
 			continue;
 		}
 
 		nOldCPC=pCPU->GetPC();
-		nOldGPC=pGPU->GetPC();
+		nOldGPC=nGPC;
 		nOldMemType=nMemType;
 
 		// Debug window
@@ -4657,31 +4678,41 @@ void DebugUpdateThread(void*) {
                                 memcpy(Distmp, Disasm, sizeof(Disasm));
                             LeaveCriticalSection(&csDisasm);
 
+							// no history: the core's GPU never goes through do1()
+							const bool gpuView = p9918Active() && bDebugGpuFocus;
+
 							// show line with bank only for multi-bank cartridges
 							// we want to generate a few extra lines to guarantee the cursor is stable
 							int precount = DEBUGLINES*2/3;
-							for (idx=precount-10; idx<DEBUGLINES; idx++) {
-                                // This assumes the GPU can never execute at >6000
-								if ((xb)&&((Distmp[idx].pc & 0xE000) == 0x6000)) {
-									EmitDebugLine('b', Distmp[idx], csOut, nLineCnt);
-								} else {
-									EmitDebugLine(' ', Distmp[idx], csOut, nLineCnt);
+							if (!gpuView) {
+								for (idx=precount-10; idx<DEBUGLINES; idx++) {
+									// This assumes the GPU can never execute at >6000
+									if ((xb)&&((Distmp[idx].pc & 0xE000) == 0x6000)) {
+										EmitDebugLine('b', Distmp[idx], csOut, nLineCnt);
+									} else {
+										EmitDebugLine(' ', Distmp[idx], csOut, nLineCnt);
+									}
+								}
+								while (nLineCnt > precount) {
+									// most likely at least a few
+									int nPos = csOut.Find('\n');
+									if (nPos == -1) break;
+									csOut = csOut.Mid(nPos+1);
+									nLineCnt--;
 								}
 							}
-							while (nLineCnt > precount) {
-								// most likely at least a few
-								int nPos = csOut.Find('\n');
-								if (nPos == -1) break;
-								csOut = csOut.Mid(nPos+1);
-								nLineCnt--;
-							}
 
-							myHist.pc = pCurrentCPU->GetPC();
-							if (pCurrentCPU == pCPU) {
-								myHist.bank = xbBank;
-							} else {
-								// GPU
+							if (gpuView) {
+								myHist.pc = p9918DbgGpuPC();
 								myHist.bank = -1;
+							} else {
+								myHist.pc = pCurrentCPU->GetPC();
+								if (pCurrentCPU == pCPU) {
+									myHist.bank = xbBank;
+								} else {
+									// GPU
+									myHist.bank = -1;
+								}
 							}
 							myHist.cycles = 0;
 
@@ -4760,23 +4791,13 @@ void DebugUpdateThread(void*) {
 									tmpPC=GetSafeCpuByte(WP+c, xbBank)*256 + GetSafeCpuByte(WP+c+1, xbBank);
 								}
 							}
-							if (bF18Enabled) {
-								// extra 2k of GPU memory
-								while (tmpPC > 0x47ff) tmpPC-=0x4800;
-							} else {
-								while (tmpPC > 0x3fff) tmpPC-=0x4000;
-							}
+							while (tmpPC >= GetDebugVDPSize()) tmpPC-=GetDebugVDPSize();
 							for (idx2=0; idx2<34; idx2++) {
 								sprintf(buf1, "%04X: ", tmpPC);
 								strcpy(buf3, "");
 								for (idx=0; idx<8; idx++) {
 									c=VDP[tmpPC++];
-									if (bF18Enabled) {
-										// extra 2k of GPU memory
-										while (tmpPC > 0x47ff) tmpPC-=0x4800;
-									} else {
-										while (tmpPC > 0x3fff) tmpPC-=0x4000;
-									}
+									while (tmpPC >= GetDebugVDPSize()) tmpPC-=GetDebugVDPSize();
 									sprintf(buf2, "%02X ", c);
 									strcat(buf1, buf2);
                                     c -= nDebugHexOffset;
@@ -4958,7 +4979,6 @@ void DebugUpdateThread(void*) {
 
 				csOut+="\r\n";
 
-				// the core runs the GPU itself, so pGPU is not it
 				if (p9918Active()) {
 					if (!p9918DbgGpuArmed()) {
 						csOut+="  GPU: idle\r\n";
