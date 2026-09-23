@@ -1302,7 +1302,8 @@ LONG_PTR FAR PASCAL myproc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 								"hq4x code by Maxim Stepin\n"\
 								"Shay Green for the TV Filter\n"\
 								"Keyboard map by Ron Reuter - www.mainbyte.com\n"\
-								"RamusM for the ECM sprite handling\n\n"\
+								"RamusM for the ECM sprite handling\n"\
+								"Troy Schrapel (visrealm) - pico9918-core VDP engine\n\n"\
 								"tursi@harmlesslion.com\n"\
 								"http://harmlesslion.com/software/classic99", 
 						VERSION);
